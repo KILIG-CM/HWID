@@ -89,6 +89,22 @@ body {
   border: 1px solid rgba(255,255,255,0.5);
 }
 
+/* Native desktop window: fill the OS frame, drop the floating-window chrome. */
+.app-window.fill {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+body:has(.app-window.fill) {
+  background: var(--bg-window);
+  overflow: hidden;
+}
+.app-window.fill .titlebar { -webkit-app-region: drag; }
+.app-window.fill .win-controls,
+.app-window.fill .titlebar button { -webkit-app-region: no-drag; }
+
 .titlebar {
   height: var(--title-h);
   flex: 0 0 var(--title-h);

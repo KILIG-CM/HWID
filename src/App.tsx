@@ -7,7 +7,10 @@ import Logs from './components/panels/Logs';
 import Settings from './components/panels/Settings';
 import { buildIdentifiers, shortHash, SEED_LOGS, SEED_SNAPSHOTS } from './data';
 import { deviceService } from './services/deviceService';
+import { isTauri, minimizeWindow, toggleMaximizeWindow, closeWindow } from './services/windowControls';
 import type { Identifier, Snapshot, LogEntry, AppSettings, ApplyItem } from './types';
+
+const NATIVE = isTauri();
 
 const NAV = [
   { id: 'dashboard', label: '总览',    icon: 'dashboard' },
@@ -199,16 +202,19 @@ function AppWindow() {
   const onCopy = () => toast('info', '已复制到剪贴板');
 
   return (
-    <div className="app-window" style={{ width: 1180, height: 760 }}>
-      <div className="titlebar">
+    <div
+      className={`app-window${NATIVE ? ' fill' : ''}`}
+      style={NATIVE ? undefined : { width: 1180, height: 760 }}
+    >
+      <div className="titlebar" data-tauri-drag-region={NATIVE ? '' : undefined}>
         <span className="tb-icon"><Icon name="fingerprint" size={14} stroke={2} /></span>
         <span className="tb-title">设备标识管理器</span>
         <span className="tb-sub">DeviceID Manager</span>
         <span className="tb-spacer" />
         <div className="win-controls">
-          <button title="最小化"><Icon name="min" size={15} /></button>
-          <button title="最大化"><Icon name="max" size={13} /></button>
-          <button className="close" title="关闭"><Icon name="x" size={15} /></button>
+          <button title="最小化" onClick={minimizeWindow}><Icon name="min" size={15} /></button>
+          <button title="最大化" onClick={toggleMaximizeWindow}><Icon name="max" size={13} /></button>
+          <button className="close" title="关闭" onClick={closeWindow}><Icon name="x" size={15} /></button>
         </div>
       </div>
 
@@ -292,6 +298,7 @@ export default function App() {
   const [scale, setScale] = useState(1);
 
   useLayoutEffect(() => {
+    if (NATIVE) return; // native window fills the frame; no scaling needed.
     const fit = () => {
       const pad = 32;
       const s = Math.min((window.innerWidth - pad) / 1180, (window.innerHeight - pad) / 760, 1);
@@ -302,6 +309,10 @@ export default function App() {
     return () => window.removeEventListener('resize', fit);
   }, []);
 
+  // Inside the desktop app the OS window IS the chrome — fill it directly.
+  if (NATIVE) return <AppWindow />;
+
+  // In the browser, render the scaled desktop "stage" preview.
   return (
     <div className="stage">
       <div style={{ transform: `scale(${scale})`, transformOrigin: 'center center', transition: 'transform .15s ease' }}>

@@ -1,30 +1,53 @@
 /**
- * Device service interface + mock implementation.
+ * Device service.
  *
- * Replace MockDeviceService with a real implementation that calls the
- * Electron IPC / native addon / backend API once ready.
- *
- * The UI imports ONLY IDeviceService — swapping the implementation
- * requires no changes to components.
+ * When running inside Tauri (the desktop app) these calls are forwarded to the
+ * Rust backend via `invoke`, which performs the real Windows registry / WMI
+ * operations. When running in a plain browser (e.g. `npm run dev` without
+ * Tauri) they fall back to a mock so the UI is still fully explorable.
  */
 
 export interface IDeviceService {
-  /** Write a single identifier value to the system */
   writeIdentifier(key: string, value: string): Promise<void>;
-  /** Read the live value of a single identifier from the system */
   readIdentifier(key: string): Promise<string>;
-  /** Run the environment diagnostic and stream log lines via a callback */
   runDiagnostic(onLine: (lvl: string, msg: string) => void): Promise<void>;
 }
 
-export class MockDeviceService implements IDeviceService {
+/** True when running inside the Tauri webview. */
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+/** Lazily import the Tauri API so the browser build doesn't choke on it. */
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<T>(cmd, args);
+}
+
+class TauriDeviceService implements IDeviceService {
+  async writeIdentifier(key: string, value: string): Promise<void> {
+    await tauriInvoke<void>('write_identifier', { key, value });
+  }
+
+  async readIdentifier(key: string): Promise<string> {
+    return tauriInvoke<string>('read_identifier', { key });
+  }
+
+  async runDiagnostic(onLine: (lvl: string, msg: string) => void): Promise<void> {
+    const lines = await tauriInvoke<Array<{ lvl: string; msg: string }>>('run_diagnostic');
+    for (const l of lines) {
+      onLine(l.lvl, l.msg);
+      await new Promise((r) => setTimeout(r, 380));
+    }
+  }
+}
+
+class MockDeviceService implements IDeviceService {
   async writeIdentifier(_key: string, _value: string): Promise<void> {
-    // TODO: replace with real registry/hardware write via IPC
     await new Promise((r) => setTimeout(r, 420));
   }
 
   async readIdentifier(_key: string): Promise<string> {
-    // TODO: replace with real registry/hardware read via IPC
     return '';
   }
 
@@ -45,4 +68,6 @@ export class MockDeviceService implements IDeviceService {
   }
 }
 
-export const deviceService: IDeviceService = new MockDeviceService();
+export const deviceService: IDeviceService = isTauri()
+  ? new TauriDeviceService()
+  : new MockDeviceService();

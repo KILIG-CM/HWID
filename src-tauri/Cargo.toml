@@ -1,0 +1,30 @@
+[package]
+name = "device-id-manager"
+version = "0.1.0"
+description = "设备标识管理器 — Windows 设备指纹/标识管理工具"
+authors = ["KILIG-CM"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+# The library is what tauri's generated main binary links against.
+name = "device_id_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Windows-only: registry access + WMI for hardware identifiers.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+wmi = "0.13"
+
+[features]
+# This feature is used for production builds where `devUrl` is not used.
+custom-protocol = ["tauri/custom-protocol"]
