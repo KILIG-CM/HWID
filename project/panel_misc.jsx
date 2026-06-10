@@ -67,7 +67,7 @@ const LVL_META = {
   err:  { tag: "tag-danger", label: "ERR", color: "var(--danger)" },
 };
 
-function Logs({ logs, onClear, onDiagnose, diagnosing }) {
+function Logs({ logs, onClear }) {
   const [filter, setFilter] = useState("全部");
   const scroller = useRef(null);
   const filters = ["全部", "info", "ok", "warn", "err"];
@@ -84,10 +84,6 @@ function Logs({ logs, onClear, onDiagnose, diagnosing }) {
           <div className="page-sub">服务运行、标识修改与还原的实时记录</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-ghost" onClick={onDiagnose} disabled={diagnosing}>
-            <Icon name="zap" size={15} style={diagnosing ? { animation: "spin .8s linear infinite" } : null} />
-            {diagnosing ? "运行中…" : "运行诊断"}
-          </button>
           <button className="btn btn-ghost" onClick={onClear}><Icon name="x" size={15} />清空</button>
         </div>
       </div>

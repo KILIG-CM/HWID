@@ -3,7 +3,6 @@
    ============================================================ */
 
 const NAV = [
-  { id: "dashboard", label: "总览", icon: "dashboard" },
   { id: "ids", label: "设备标识", icon: "id" },
   { id: "history", label: "历史与备份", icon: "history" },
   { id: "logs", label: "日志输出", icon: "terminal" },
@@ -51,7 +50,7 @@ function ApplyOverlay({ items, done }) {
 }
 
 function App({ tweakVars = {} }) {
-  const [view, setView] = useState("dashboard");
+  const [view, setView] = useState("ids");
   const [identifiers, setIdentifiers] = useState(buildIdentifiers);
   const [logs, setLogs] = useState(SEED_LOGS);
   const [snapshots, setSnapshots] = useState(SEED_SNAPSHOTS);
@@ -211,11 +210,11 @@ function App({ tweakVars = {} }) {
         </nav>
 
         <main className="content" key={view}>
-          {view === "dashboard" && <Dashboard identifiers={identifiers} snapshots={snapshots} onGoto={setView} fingerprint={fingerprint} />}
           {view === "ids" && <DeviceIDs identifiers={identifiers} setStage={setStage} clearStage={clearStage}
-            resetOne={resetOne} toggleLock={toggleLock} applyAll={applyAll} resetAll={resetAll} stageAll={stageAll} onCopy={onCopy} />}
+            resetOne={resetOne} toggleLock={toggleLock} applyAll={applyAll} resetAll={resetAll} stageAll={stageAll} onCopy={onCopy}
+            onDiagnose={diagnose} diagnosing={diagnosing} />}
           {view === "history" && <History snapshots={snapshots} identifiers={identifiers} onRestore={restoreSnapshot} onCreate={createSnapshot} onDelete={deleteSnapshot} />}
-          {view === "logs" && <Logs logs={logs} onClear={() => { setLogs([]); }} onDiagnose={diagnose} diagnosing={diagnosing} />}
+          {view === "logs" && <Logs logs={logs} onClear={() => { setLogs([]); }} />}
           {view === "settings" && <Settings opts={opts} setOpts={setOpts} />}
         </main>
       </div>

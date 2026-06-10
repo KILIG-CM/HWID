@@ -1,11 +1,10 @@
 import { useState, useLayoutEffect, useEffect } from 'react';
 import Icon from './components/common/Icon';
-import Dashboard from './components/panels/Dashboard';
 import DeviceIDs from './components/panels/DeviceIDs';
 import History from './components/panels/History';
 import Logs from './components/panels/Logs';
 import Settings from './components/panels/Settings';
-import { buildIdentifiers, shortHash, SEED_LOGS, SEED_SNAPSHOTS, SYSTEM_INFO } from './data';
+import { buildIdentifiers, SEED_LOGS, SEED_SNAPSHOTS } from './data';
 import { deviceService } from './services/deviceService';
 import { isTauri, minimizeWindow, toggleMaximizeWindow, closeWindow } from './services/windowControls';
 import type { Identifier, Snapshot, LogEntry, AppSettings, ApplyItem } from './types';
@@ -13,7 +12,6 @@ import type { Identifier, Snapshot, LogEntry, AppSettings, ApplyItem } from './t
 const NATIVE = isTauri();
 
 const NAV = [
-  { id: 'dashboard', label: '总览',    icon: 'dashboard' },
   { id: 'ids',       label: '设备标识', icon: 'id'        },
   { id: 'history',   label: '历史与备份', icon: 'history' },
   { id: 'logs',      label: '日志输出', icon: 'terminal'  },
@@ -79,22 +77,20 @@ function ApplyOverlay({ items, done }: { items: ApplyItem[]; done: boolean }) {
 }
 
 function AppWindow() {
-  const [view, setView] = useState<ViewId>('dashboard');
+  const [view, setView] = useState<ViewId>('ids');
   const [identifiers, setIdentifiers] = useState<Identifier[]>(buildIdentifiers);
   const [logs, setLogs] = useState<LogEntry[]>(SEED_LOGS);
   const [snapshots, setSnapshots] = useState<Snapshot[]>(SEED_SNAPSHOTS);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [fingerprint, setFingerprint] = useState(shortHash);
   const [applying, setApplying] = useState<{ items: ApplyItem[]; done: boolean } | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const [opts, setOpts] = useState<AppSettings>({ autoBackup: true, confirm: false, verboseLog: false });
-  const [systemInfo, setSystemInfo] = useState(SYSTEM_INFO);
 
   const addLog = (lvl: LogEntry['lvl'], msg: string) =>
     setLogs(L => [...L, { t: nowTime(), lvl, msg }]);
 
   // On startup inside the desktop app, read the REAL machine identifiers
-  // + system info from the Rust backend and replace the seed/demo values.
+  // from the Rust backend and replace the seed/demo values.
   useEffect(() => {
     if (!NATIVE) return;
     let cancelled = false;
@@ -113,8 +109,6 @@ function AppWindow() {
             })
           );
         }
-        if (info.system.length) setSystemInfo(info.system);
-        setFingerprint(shortHash());
         addLog('ok', `已读取本机设备信息（${keys.length} 项标识）`);
       } catch (e) {
         if (!cancelled) addLog('warn', `读取本机信息失败：${e}`);
@@ -145,7 +139,6 @@ function AppWindow() {
     setIdentifiers(ids => ids.map(i => i.key === key ? { ...i, value: i.original, staged: null } : i));
     const it = identifiers.find(i => i.key === key);
     if (it) { addLog('ok', `已还原「${it.label}」为原始值`); toast('ok', '已还原', it.label); }
-    setFingerprint(shortHash());
   };
 
   const stageAll = () => {
@@ -157,7 +150,6 @@ function AppWindow() {
     setIdentifiers(ids => ids.map(i => ({ ...i, value: i.original, staged: null })));
     addLog('ok', '已将全部标识还原为原始值');
     toast('ok', '全部已还原', '所有标识恢复到出厂基线');
-    setFingerprint(shortHash());
   };
 
   const applyAll = async () => {
@@ -193,7 +185,6 @@ function AppWindow() {
     setIdentifiers(ids => ids.map(i =>
       i.staged != null && i.staged !== i.value ? { ...i, value: i.staged, staged: null } : i
     ));
-    setFingerprint(shortHash());
     items = items.map(it => ({ ...it, state: 'done' }));
     setApplying({ items, done: true });
     addLog('ok', `全部 ${pending.length} 项标识已成功写入`);
@@ -214,7 +205,6 @@ function AppWindow() {
 
   const restoreSnapshot = (s: Snapshot) => {
     setIdentifiers(ids => ids.map(i => ({ ...i, value: i.original, staged: null })));
-    setFingerprint(shortHash());
     addLog('ok', `已从快照「${s.name}」还原`);
     toast('ok', '已还原快照', s.name);
   };
@@ -277,15 +267,12 @@ function AppWindow() {
         </nav>
 
         <main className="content" key={view}>
-          {view === 'dashboard' && (
-            <Dashboard identifiers={identifiers} snapshots={snapshots} onGoto={setView}
-              fingerprint={fingerprint} systemInfo={systemInfo} />
-          )}
           {view === 'ids' && (
             <DeviceIDs
               identifiers={identifiers} setStage={setStage} clearStage={clearStage}
               resetOne={resetOne} toggleLock={toggleLock} applyAll={applyAll}
               resetAll={resetAll} stageAll={stageAll} onCopy={onCopy}
+              onDiagnose={diagnose} diagnosing={diagnosing}
             />
           )}
           {view === 'history' && (
@@ -293,7 +280,7 @@ function AppWindow() {
               onRestore={restoreSnapshot} onCreate={createSnapshot} onDelete={deleteSnapshot} />
           )}
           {view === 'logs' && (
-            <Logs logs={logs} onClear={() => setLogs([])} onDiagnose={diagnose} diagnosing={diagnosing} />
+            <Logs logs={logs} onClear={() => setLogs([])} />
           )}
           {view === 'settings' && <Settings opts={opts} setOpts={setOpts} />}
         </main>
