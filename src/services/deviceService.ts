@@ -13,7 +13,6 @@ export interface IDeviceService {
   /** Read all real identifiers + system info from the machine (empty in browser). */
   loadDeviceInfo(): Promise<DeviceInfo>;
   writeIdentifier(key: string, value: string): Promise<void>;
-  readIdentifier(key: string): Promise<string>;
   runDiagnostic(onLine: (lvl: string, msg: string) => void): Promise<void>;
 }
 
@@ -37,10 +36,6 @@ class TauriDeviceService implements IDeviceService {
     await tauriInvoke<void>('write_identifier', { key, value });
   }
 
-  async readIdentifier(key: string): Promise<string> {
-    return tauriInvoke<string>('read_identifier', { key });
-  }
-
   async runDiagnostic(onLine: (lvl: string, msg: string) => void): Promise<void> {
     const lines = await tauriInvoke<Array<{ lvl: string; msg: string }>>('run_diagnostic');
     for (const l of lines) {
@@ -53,15 +48,11 @@ class TauriDeviceService implements IDeviceService {
 class MockDeviceService implements IDeviceService {
   async loadDeviceInfo(): Promise<DeviceInfo> {
     // Browser/dev: no real machine — keep the UI's seed values.
-    return { identifiers: {}, system: [] };
+    return { identifiers: [], system: [] };
   }
 
   async writeIdentifier(_key: string, _value: string): Promise<void> {
     await new Promise((r) => setTimeout(r, 420));
-  }
-
-  async readIdentifier(_key: string): Promise<string> {
-    return '';
   }
 
   async runDiagnostic(onLine: (lvl: string, msg: string) => void): Promise<void> {

@@ -16,6 +16,20 @@ export function shortHash() {
   return rand(16, h).replace(/(.{4})/g, '$1 ').trim();
 }
 
+/** Map a backend identifier `kind` to a random-value generator. */
+export function genForKind(kind: string): () => string {
+  switch (kind) {
+    case 'guid': return genGuid;
+    case 'deviceid': return () => 'G:' + genGuid();
+    case 'productid': return () => `00330-80000-00000-${rand(2, 'ABCDEFGHJKLMNP')}${rand(3)}`;
+    case 'mac': return genMac;
+    case 'disk': return () => 'S' + rand(13, '0123456789ABCDEFGHJKLMNPRTUVWXYZ');
+    case 'cpu': return () => 'BFEBFBFF' + rand(8);
+    case 'mb': return () => rand(15, '0123456789');
+    default: return genGuid;
+  }
+}
+
 export function buildIdentifiers(): Identifier[] {
   return [
     {

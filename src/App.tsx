@@ -1,11 +1,12 @@
-import { useState, useLayoutEffect, useEffect } from 'react';
+import { useState, useLayoutEffect, useEffect, useRef } from 'react';
 import Icon from './components/common/Icon';
 import DeviceIDs from './components/panels/DeviceIDs';
 import History from './components/panels/History';
 import Logs from './components/panels/Logs';
 import Settings from './components/panels/Settings';
-import { buildIdentifiers, SEED_LOGS, SEED_SNAPSHOTS } from './data';
+import { buildIdentifiers, genForKind, SEED_LOGS, SEED_SNAPSHOTS } from './data';
 import { deviceService } from './services/deviceService';
+import { loadSettings, saveSettings } from './services/settingsService';
 import { isTauri, minimizeWindow, toggleMaximizeWindow, closeWindow } from './services/windowControls';
 import type { Identifier, Snapshot, LogEntry, AppSettings, ApplyItem } from './types';
 
@@ -89,8 +90,9 @@ function AppWindow() {
   const addLog = (lvl: LogEntry['lvl'], msg: string) =>
     setLogs(L => [...L, { t: nowTime(), lvl, msg }]);
 
-  // On startup inside the desktop app, read the REAL machine identifiers
-  // from the Rust backend and replace the seed/demo values.
+  // On startup inside the desktop app, build the identifier list from the REAL
+  // machine (registry + WMI) — no hardcoded device names. Only real, existing
+  // devices are returned by the backend.
   useEffect(() => {
     if (!NATIVE) return;
     let cancelled = false;
@@ -98,18 +100,21 @@ function AppWindow() {
       try {
         const info = await deviceService.loadDeviceInfo();
         if (cancelled) return;
-        const keys = Object.keys(info.identifiers);
-        if (keys.length) {
-          setIdentifiers(ids =>
-            ids.map(i => {
-              const real = info.identifiers[i.key];
-              // Replace both original + current value so the row reads "原始"
-              // and any later edits diff against the real machine value.
-              return real != null ? { ...i, original: real, value: real, staged: null } : i;
-            })
-          );
+        if (info.identifiers.length) {
+          setIdentifiers(info.identifiers.map(b => ({
+            key: b.key,
+            group: b.group as Identifier['group'],
+            label: b.label,
+            icon: b.icon,
+            desc: b.desc,
+            original: b.value,
+            value: b.value,
+            staged: null,
+            locked: b.locked,
+            gen: genForKind(b.kind),
+          })));
         }
-        addLog('ok', `已读取本机设备信息（${keys.length} 项标识）`);
+        addLog('ok', `已识别本机设备信息（${info.identifiers.length} 项）`);
       } catch (e) {
         if (!cancelled) addLog('warn', `读取本机信息失败：${e}`);
       }
@@ -117,6 +122,21 @@ function AppWindow() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load persisted settings on mount; persist on every change afterwards.
+  const settingsLoaded = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await loadSettings();
+      if (!cancelled) { setOpts(saved); settingsLoaded.current = true; }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!settingsLoaded.current) return; // don't overwrite the file before load
+    saveSettings(opts);
+  }, [opts]);
 
   const toast = (type: Toast['type'], msg: string, desc?: string) => {
     const id = Math.random();
@@ -176,7 +196,13 @@ function AppWindow() {
       setApplying({ items: [...items], done: false });
       addLog('info', `写入「${items[idx].label}」…`);
 
-      await deviceService.writeIdentifier(pending[idx].key, pending[idx].staged!);
+      // Registry identifiers write for real; hardware ones (MAC/disk/…) aren't
+      // yet supported — log a warning but keep the flow going.
+      try {
+        await deviceService.writeIdentifier(pending[idx].key, pending[idx].staged!);
+      } catch (e) {
+        addLog('warn', `「${items[idx].label}」写入未完成：${e}`);
+      }
 
       items = items.map((it, i) => i === idx ? { ...it, state: 'done' } : it);
       setApplying({ items: [...items], done: false });

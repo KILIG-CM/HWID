@@ -39,8 +39,17 @@ export interface ApplyItem {
 }
 
 export interface DeviceInfo {
-  /** identifier key -> live value read from the machine */
-  identifiers: Record<string, string>;
+  /** full identifier records read from the machine */
+  identifiers: Array<{
+    key: string;
+    group: string;
+    label: string;
+    icon: string;
+    desc: string;
+    value: string;
+    kind: string;
+    locked: boolean;
+  }>;
   /** read-only system info rows */
   system: Array<{ label: string; value: string }>;
 }

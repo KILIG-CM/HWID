@@ -9,7 +9,6 @@
 //! authorized maintenance / testing context.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagLine {
@@ -23,11 +22,23 @@ pub struct KeyVal {
     pub value: String,
 }
 
-/// Everything the dashboard needs to display the *real* machine on startup.
+/// A single real device identifier, fully described from the live machine.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentifierInfo {
+    pub key: String,
+    pub group: String, // 系统标识 / 网络 / 硬件
+    pub label: String, // display name (e.g. "MAC 地址 · 以太网")
+    pub icon: String,
+    pub desc: String,  // real model / description from the machine
+    pub value: String, // current real value ("未知" if unreadable)
+    pub kind: String,  // generator kind: guid|deviceid|productid|mac|disk|cpu|mb
+    pub locked: bool,
+}
+
+/// Everything the app needs to display the *real* machine on startup.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceInfo {
-    /// identifier key (machine_guid, mac_eth, …) -> live value
-    pub identifiers: HashMap<String, String>,
+    pub identifiers: Vec<IdentifierInfo>,
     /// read-only system info rows (操作系统, 计算机名, …)
     pub system: Vec<KeyVal>,
 }
@@ -47,24 +58,7 @@ pub fn load_device_info() -> Result<DeviceInfo, String> {
     }
     #[cfg(not(windows))]
     {
-        Ok(DeviceInfo {
-            identifiers: HashMap::new(),
-            system: Vec::new(),
-        })
-    }
-}
-
-/// Read the live value of a single identifier from the system.
-#[tauri::command]
-pub fn read_identifier(key: String) -> Result<String, String> {
-    #[cfg(windows)]
-    {
-        windows_impl::read(&key).map_err(|e| e.to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = key;
-        Ok(String::new())
+        Ok(DeviceInfo { identifiers: Vec::new(), system: Vec::new() })
     }
 }
 
@@ -87,7 +81,6 @@ pub fn write_identifier(key: String, value: String) -> Result<(), String> {
 pub fn run_diagnostic() -> Vec<DiagLine> {
     #[cfg(windows)]
     {
-        // Same COM-apartment reason as load_device_info — run on a fresh thread.
         std::thread::spawn(windows_impl::diagnose)
             .join()
             .unwrap_or_else(|_| {
@@ -108,7 +101,7 @@ pub fn run_diagnostic() -> Vec<DiagLine> {
 
 #[cfg(windows)]
 mod windows_impl {
-    use super::{DeviceInfo, DiagLine, KeyVal};
+    use super::{DeviceInfo, DiagLine, IdentifierInfo, KeyVal};
     use std::collections::HashMap;
     use winreg::enums::*;
     use winreg::RegKey;
@@ -116,8 +109,9 @@ mod windows_impl {
 
     type R<T> = Result<T, Box<dyn std::error::Error>>;
 
-    /// Map a frontend identifier key to its registry location.
-    /// (subkey path under HKLM, value name)
+    const UNKNOWN: &str = "未知";
+
+    /// Map a system-identifier key to its registry location (subkey, value name).
     fn reg_location(key: &str) -> Option<(&'static str, &'static str)> {
         match key {
             "machine_guid" => Some((r"SOFTWARE\Microsoft\Cryptography", "MachineGuid")),
@@ -127,15 +121,12 @@ mod windows_impl {
         }
     }
 
-    pub fn read(key: &str) -> R<String> {
-        if let Some((path, name)) = reg_location(key) {
-            let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-            let sub = hklm.open_subkey(path)?;
-            let val: String = sub.get_value(name)?;
-            return Ok(val);
-        }
-        // Hardware identifiers come from WMI — read them in bulk via load_info.
-        Err(format!("单项读取暂不支持该标识: {key}（请用整机读取）").into())
+    fn read_reg(key: &str) -> Option<String> {
+        let (path, name) = reg_location(key)?;
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let sub = hklm.open_subkey(path).ok()?;
+        let val: String = sub.get_value(name).ok()?;
+        if val.trim().is_empty() { None } else { Some(val.trim().to_string()) }
     }
 
     pub fn write(key: &str, value: &str) -> R<()> {
@@ -147,11 +138,10 @@ mod windows_impl {
         }
         // Hardware identifiers require driver-level spoofing (e.g. MAC via the
         // adapter's NetworkAddress registry value, disk serial via vendor tools).
-        // TODO: implement per-identifier write routines.
-        Err(format!("未实现的标识写入: {key}").into())
+        // Not implemented — the UI treats this as a non-fatal warning.
+        Err(format!("暂不支持写入该硬件标识: {key}").into())
     }
 
-    /// Extract a non-empty string from a WMI Variant.
     fn vstr(v: Option<&Variant>) -> Option<String> {
         match v {
             Some(Variant::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
@@ -159,101 +149,155 @@ mod windows_impl {
         }
     }
 
-    /// Run a WMI query and return the first row, if any.
     fn wmi_one(wmi: &WMIConnection, query: &str) -> Option<HashMap<String, Variant>> {
-        wmi.raw_query::<HashMap<String, Variant>>(query)
-            .ok()?
-            .into_iter()
-            .next()
+        wmi.raw_query::<HashMap<String, Variant>>(query).ok()?.into_iter().next()
+    }
+
+    /// Virtual / pseudo adapters that should never appear as a real NIC.
+    fn is_virtual_adapter(name: &str, conn: &str) -> bool {
+        let hay = format!("{name} {conn}").to_lowercase();
+        const BAD: &[&str] = &[
+            "virtual", "vmware", "virtualbox", "hyper-v", "vethernet", "loopback",
+            "tap", "tunnel", "miniport", "pseudo", "teredo", "isatap", "bluetooth",
+            "vpn", "wi-fi direct", "wifi direct", "wan", "ras", "npcap", "packet",
+        ];
+        BAD.iter().any(|b| hay.contains(b))
     }
 
     pub fn load_info() -> R<DeviceInfo> {
-        let mut ids: HashMap<String, String> = HashMap::new();
+        let mut ids: Vec<IdentifierInfo> = Vec::new();
         let mut system: Vec<KeyVal> = Vec::new();
-        let push = |s: &mut Vec<KeyVal>, label: &str, value: String| {
-            s.push(KeyVal { label: label.into(), value })
-        };
 
-        // ---- Registry-based identifiers ----
-        for key in ["machine_guid", "device_id", "product_id"] {
-            if let Ok(v) = read(key) {
-                ids.insert(key.into(), v);
-            }
+        // ---- System identifiers (registry) ----
+        let sys_specs = [
+            ("machine_guid", "机器 GUID", "id",
+                "MachineGuid · HKLM\\SOFTWARE\\Microsoft\\Cryptography", "guid"),
+            ("device_id", "设备 ID", "monitor",
+                "SQM MachineId · 设备遥测标识", "deviceid"),
+            ("product_id", "注册表产品标识", "shield",
+                "ProductId · Windows 安装标识", "productid"),
+        ];
+        for (key, label, icon, desc, kind) in sys_specs {
+            let value = read_reg(key).unwrap_or_else(|| UNKNOWN.to_string());
+            ids.push(IdentifierInfo {
+                key: key.into(), group: "系统标识".into(), label: label.into(),
+                icon: icon.into(), desc: desc.into(), value, kind: kind.into(), locked: false,
+            });
         }
 
-        // ---- WMI: hardware identifiers + system info ----
+        // ---- WMI ----
         let com = COMLibrary::new()?;
         let wmi = WMIConnection::new(com)?;
 
-        // Network adapters → pick one ethernet + one wireless MAC.
+        // Network: only real, enabled, identifiable physical NICs.
         if let Ok(rows) = wmi.raw_query::<HashMap<String, Variant>>(
-            "SELECT Name, NetConnectionID, MACAddress FROM Win32_NetworkAdapter WHERE MACAddress IS NOT NULL",
+            "SELECT Name, NetConnectionID, MACAddress, PhysicalAdapter, NetEnabled \
+             FROM Win32_NetworkAdapter WHERE PhysicalAdapter = TRUE AND MACAddress IS NOT NULL",
         ) {
-            let mut eth: Option<String> = None;
-            let mut wifi: Option<String> = None;
+            let mut idx = 0;
             for row in &rows {
                 let mac = match vstr(row.get("MACAddress")) {
                     Some(m) => m.replace(':', "-"),
                     None => continue,
                 };
-                let name = vstr(row.get("Name")).unwrap_or_default().to_lowercase();
-                let conn = vstr(row.get("NetConnectionID")).unwrap_or_default().to_lowercase();
-                let is_wifi = ["wireless", "wi-fi", "wifi", "wlan", "802.11"]
-                    .iter()
-                    .any(|k| name.contains(k) || conn.contains(k));
-                if is_wifi {
-                    if wifi.is_none() {
-                        wifi = Some(mac);
-                    }
-                } else if eth.is_none() {
-                    eth = Some(mac);
+                let name = vstr(row.get("Name")).unwrap_or_default();
+                let conn = vstr(row.get("NetConnectionID")).unwrap_or_default();
+                // Must have a real connection name (shown in 网络连接) and not be virtual.
+                if name.is_empty() || conn.is_empty() || is_virtual_adapter(&name, &conn) {
+                    continue;
                 }
-            }
-            if let Some(m) = eth {
-                ids.insert("mac_eth".into(), m);
-            }
-            if let Some(m) = wifi {
-                ids.insert("mac_wifi".into(), m);
+                ids.push(IdentifierInfo {
+                    key: format!("mac_{idx}"),
+                    group: "网络".into(),
+                    label: format!("MAC 地址 · {conn}"),
+                    icon: "network".into(),
+                    desc: name,
+                    value: mac,
+                    kind: "mac".into(),
+                    locked: false,
+                });
+                idx += 1;
             }
         }
 
-        // Disk serial (first physical disk).
-        if let Some(row) = wmi_one(&wmi, "SELECT SerialNumber FROM Win32_DiskDrive") {
-            if let Some(s) = vstr(row.get("SerialNumber")) {
-                ids.insert("disk_serial".into(), s);
+        // Disks: real fixed disks with a model.
+        if let Ok(rows) = wmi.raw_query::<HashMap<String, Variant>>(
+            "SELECT Model, SerialNumber, MediaType, InterfaceType FROM Win32_DiskDrive",
+        ) {
+            let mut idx = 0;
+            for row in &rows {
+                let model = match vstr(row.get("Model")) { Some(m) => m, None => continue };
+                let media = vstr(row.get("MediaType")).unwrap_or_default().to_lowercase();
+                let iface = vstr(row.get("InterfaceType")).unwrap_or_default().to_lowercase();
+                // Skip removable / USB media — keep fixed disks.
+                if media.contains("removable") || iface.contains("usb") {
+                    continue;
+                }
+                let serial = vstr(row.get("SerialNumber")).unwrap_or_else(|| UNKNOWN.to_string());
+                ids.push(IdentifierInfo {
+                    key: format!("disk_{idx}"),
+                    group: "硬件".into(),
+                    label: if idx == 0 { "硬盘序列号".into() } else { format!("硬盘序列号 · {}", idx + 1) },
+                    icon: "disk".into(),
+                    desc: model,
+                    value: serial,
+                    kind: "disk".into(),
+                    locked: false,
+                });
+                idx += 1;
             }
         }
+
         // CPU.
-        if let Some(row) = wmi_one(&wmi, "SELECT ProcessorId FROM Win32_Processor") {
-            if let Some(s) = vstr(row.get("ProcessorId")) {
-                ids.insert("cpu_id".into(), s);
-            }
-        }
-        // Motherboard.
-        if let Some(row) = wmi_one(&wmi, "SELECT SerialNumber FROM Win32_BaseBoard") {
-            if let Some(s) = vstr(row.get("SerialNumber")) {
-                ids.insert("mb_serial".into(), s);
-            }
+        if let Some(row) = wmi_one(&wmi, "SELECT Name, ProcessorId FROM Win32_Processor") {
+            ids.push(IdentifierInfo {
+                key: "cpu_id".into(),
+                group: "硬件".into(),
+                label: "CPU 标识".into(),
+                icon: "cpu".into(),
+                desc: vstr(row.get("Name")).unwrap_or_else(|| UNKNOWN.to_string()),
+                value: vstr(row.get("ProcessorId")).unwrap_or_else(|| UNKNOWN.to_string()),
+                kind: "cpu".into(),
+                locked: false,
+            });
         }
 
-        // ---- System info rows ----
+        // Motherboard.
         if let Some(row) =
-            wmi_one(&wmi, "SELECT Caption, Version, BuildNumber FROM Win32_OperatingSystem")
+            wmi_one(&wmi, "SELECT Manufacturer, Product, SerialNumber FROM Win32_BaseBoard")
+        {
+            let mfr = vstr(row.get("Manufacturer")).unwrap_or_default();
+            let prod = vstr(row.get("Product")).unwrap_or_default();
+            let desc = format!("{mfr} {prod}").trim().to_string();
+            ids.push(IdentifierInfo {
+                key: "mb_serial".into(),
+                group: "硬件".into(),
+                label: "主板序列号".into(),
+                icon: "cpu".into(),
+                desc: if desc.is_empty() { UNKNOWN.to_string() } else { desc },
+                value: vstr(row.get("SerialNumber")).unwrap_or_else(|| UNKNOWN.to_string()),
+                kind: "mb".into(),
+                locked: false,
+            });
+        }
+
+        // ---- System info rows (real) ----
+        if let Some(row) =
+            wmi_one(&wmi, "SELECT Caption, BuildNumber FROM Win32_OperatingSystem")
         {
             if let Some(s) = vstr(row.get("Caption")) {
-                push(&mut system, "操作系统", s.replace("Microsoft ", ""));
+                system.push(KeyVal { label: "操作系统".into(), value: s.replace("Microsoft ", "") });
             }
             if let Some(s) = vstr(row.get("BuildNumber")) {
-                push(&mut system, "系统版本", s);
+                system.push(KeyVal { label: "系统版本".into(), value: s });
             }
         }
         if let Ok(name) = std::env::var("COMPUTERNAME") {
-            push(&mut system, "计算机名", name.clone());
-            push(&mut system, "主机名", format!("{}.local", name.to_lowercase()));
+            system.push(KeyVal { label: "计算机名".into(), value: name });
         }
         if let Some(row) = wmi_one(&wmi, "SELECT Caption FROM Win32_TimeZone") {
             if let Some(s) = vstr(row.get("Caption")) {
-                push(&mut system, "时区", s);
+                system.push(KeyVal { label: "时区".into(), value: s });
             }
         }
 
@@ -264,7 +308,6 @@ mod windows_impl {
         let line = |lvl: &str, msg: &str| DiagLine { lvl: lvl.into(), msg: msg.into() };
         let mut out = vec![line("info", "开始环境诊断…")];
 
-        // Admin check: writing to HKLM\...\Cryptography requires elevation.
         match RegKey::predef(HKEY_LOCAL_MACHINE)
             .open_subkey_with_flags(r"SOFTWARE\Microsoft\Cryptography", KEY_READ)
         {
@@ -272,7 +315,6 @@ mod windows_impl {
             Err(_) => out.push(line("warn", "注册表访问受限，请以管理员身份运行")),
         }
 
-        // WMI reachability.
         match COMLibrary::new().and_then(WMIConnection::new) {
             Ok(_) => out.push(line("ok", "WMI 服务连接正常")),
             Err(_) => out.push(line("warn", "WMI 连接失败")),

@@ -140,9 +140,13 @@ export default function DeviceIDs({
   const [group, setGroup] = useState('全部');
   const groups = ['全部', '系统标识', '网络', '硬件'];
 
-  const filtered = identifiers.filter(i => group === '全部' || i.group === group);
   const pendingCount = identifiers.filter(i => i.staged != null && i.staged !== i.value).length;
-  const byGroup = ['系统标识', '网络', '硬件'].map(g => ({ g, items: filtered.filter(i => i.group === g) })).filter(x => x.items.length);
+  // Flat list, ordered by group — no in-list group header bars.
+  const order = ['系统标识', '网络', '硬件'];
+  const filtered = identifiers
+    .filter(i => group === '全部' || i.group === group)
+    .slice()
+    .sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
 
   return (
     <div className="page page-anim">
@@ -173,23 +177,14 @@ export default function DeviceIDs({
         </div>
       </div>
 
-      {/* 列表 */}
+      {/* 列表：扁平展示，无分组标题栏 */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        {byGroup.length === 0 && (
+        {filtered.length === 0 && (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>没有匹配的标识项</div>
         )}
-        {byGroup.map(({ g, items }) => (
-          <div key={g}>
-            <div style={{
-              padding: '9px 16px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.08em',
-              textTransform: 'uppercase', color: 'var(--text-faint)', background: 'var(--bg-inset)',
-              borderBottom: '1px solid var(--hairline)',
-            }}>{g}</div>
-            {items.map(i => (
-              <IdRow key={i.key} id={i} onStage={setStage} onClear={clearStage}
-                onReset={resetOne} onToggleLock={toggleLock} onCopy={onCopy} />
-            ))}
-          </div>
+        {filtered.map(i => (
+          <IdRow key={i.key} id={i} onStage={setStage} onClear={clearStage}
+            onReset={resetOne} onToggleLock={toggleLock} onCopy={onCopy} />
         ))}
       </div>
 
