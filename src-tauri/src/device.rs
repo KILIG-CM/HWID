@@ -38,7 +38,12 @@ pub struct DeviceInfo {
 pub fn load_device_info() -> Result<DeviceInfo, String> {
     #[cfg(windows)]
     {
-        windows_impl::load_info().map_err(|e| e.to_string())
+        // WMI needs a COM apartment (MTA) that conflicts with the STA already
+        // set on Tauri's command thread (→ RPC_E_CHANGED_MODE / 0x80010106).
+        // Run it on a fresh thread, which starts with no apartment set.
+        std::thread::spawn(|| windows_impl::load_info().map_err(|e| e.to_string()))
+            .join()
+            .unwrap_or_else(|_| Err("读取线程异常退出".into()))
     }
     #[cfg(not(windows))]
     {
@@ -82,7 +87,12 @@ pub fn write_identifier(key: String, value: String) -> Result<(), String> {
 pub fn run_diagnostic() -> Vec<DiagLine> {
     #[cfg(windows)]
     {
-        windows_impl::diagnose()
+        // Same COM-apartment reason as load_device_info — run on a fresh thread.
+        std::thread::spawn(windows_impl::diagnose)
+            .join()
+            .unwrap_or_else(|_| {
+                vec![DiagLine { lvl: "warn".into(), msg: "诊断线程异常退出".into() }]
+            })
     }
     #[cfg(not(windows))]
     {
