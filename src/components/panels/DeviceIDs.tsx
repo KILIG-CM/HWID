@@ -33,11 +33,11 @@ function IdRow({ id, onStage, onClear, onReset, onToggleLock, onCopy }: {
 
   return (
     <div style={{
-      display: 'flex', flexDirection: 'column', gap: 9, padding: '13px 16px',
+      display: 'flex', flexDirection: 'column', gap: 9, padding: '15px 18px', minHeight: 62,
       borderBottom: '1px solid var(--hairline)', opacity: id.locked ? 0.72 : 1,
       transition: 'background .15s', background: pending ? 'var(--accent-softer)' : 'transparent',
     }}>
-      {/* 主行：图标 · 名称 · （未待应用时显示当前值）· 状态 · 操作 */}
+      {/* 主行：图标 · 名称/说明 · （未待应用时显示当前值）· 状态 · 操作 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <span style={{
           width: 34, height: 34, flex: '0 0 auto', borderRadius: 10, display: 'grid', placeItems: 'center',
@@ -46,22 +46,25 @@ function IdRow({ id, onStage, onClear, onReset, onToggleLock, onCopy }: {
           <Icon name={id.icon} size={17} />
         </span>
 
-        <div style={{ width: 178, flex: '0 0 auto', minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 }}>
-            {id.label}
-            {id.locked && <Icon name="lock" size={12} style={{ color: 'var(--text-faint)' }} />}
+        {/* 名称 + 说明：上下排列，各自单行省略，给足空间 */}
+        <div style={{ flex: '1 1 240px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div className="truncate" style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span className="truncate">{id.label}</span>
+            {id.locked && <Icon name="lock" size={12} style={{ color: 'var(--text-faint)', flex: '0 0 auto' }} />}
           </div>
-          <div className="truncate" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{id.desc}</div>
+          <div className="truncate" style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.4 }} title={id.desc}>
+            {id.desc}
+          </div>
         </div>
 
-        {/* 值区：仅在没有待应用更改时占用主行 */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
-          {!pending && (
-            <span className="mono truncate" style={{ fontSize: 12.5, color: 'var(--text)', flex: 1 }}>
+        {/* 值区：仅在没有待应用更改时占用主行，独立列、右对齐、单行省略 */}
+        {!pending && (
+          <div style={{ flex: '1 1 180px', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
+            <span className="mono truncate" style={{ fontSize: 12.5, color: 'var(--text)', textAlign: 'right' }} title={id.value}>
               {id.value}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* 状态 */}
         <div style={{ width: 74, flex: '0 0 auto', display: 'flex', justifyContent: 'flex-end' }}>
@@ -138,11 +141,11 @@ export default function DeviceIDs({
   applyAll, resetAll, stageAll, onCopy, onDiagnose, diagnosing,
 }: DeviceIDsProps) {
   const [group, setGroup] = useState('全部');
-  const groups = ['全部', '系统标识', '网络', '硬件'];
+  const groups = ['全部', '网络', '硬件'];
 
   const pendingCount = identifiers.filter(i => i.staged != null && i.staged !== i.value).length;
   // Flat list, ordered by group — no in-list group header bars.
-  const order = ['系统标识', '网络', '硬件'];
+  const order = ['网络', '硬件'];
   const filtered = identifiers
     .filter(i => group === '全部' || i.group === group)
     .slice()

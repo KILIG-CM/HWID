@@ -1,20 +1,18 @@
 import { useState, useLayoutEffect, useEffect, useRef } from 'react';
 import Icon from './components/common/Icon';
 import DeviceIDs from './components/panels/DeviceIDs';
-import History from './components/panels/History';
 import Logs from './components/panels/Logs';
 import Settings from './components/panels/Settings';
-import { buildIdentifiers, genForKind, SEED_LOGS, SEED_SNAPSHOTS } from './data';
+import { buildIdentifiers, genForKind, SEED_LOGS } from './data';
 import { deviceService } from './services/deviceService';
 import { loadSettings, saveSettings } from './services/settingsService';
 import { isTauri, minimizeWindow, toggleMaximizeWindow, closeWindow } from './services/windowControls';
-import type { Identifier, Snapshot, LogEntry, AppSettings, ApplyItem } from './types';
+import type { Identifier, LogEntry, AppSettings, ApplyItem } from './types';
 
 const NATIVE = isTauri();
 
 const NAV = [
   { id: 'ids',       label: '设备标识', icon: 'id'        },
-  { id: 'history',   label: '历史与备份', icon: 'history' },
   { id: 'logs',      label: '日志输出', icon: 'terminal'  },
   { id: 'settings',  label: '设置',    icon: 'settings'  },
 ] as const;
@@ -50,8 +48,8 @@ function ApplyOverlay({ items, done }: { items: ApplyItem[]; done: boolean }) {
               style={done ? undefined : { animation: 'spin .8s linear infinite' }} />
           </span>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{done ? '更改已应用' : '正在写入设备标识…'}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>{done ? '全部完成，已记录日志' : '请勿关闭窗口'}</div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{done ? '模拟应用成功' : '正在模拟应用更改…'}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>{done ? '仅更新页面，未写入真实系统' : '演示流程，不会修改系统'}</div>
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -81,7 +79,6 @@ function AppWindow() {
   const [view, setView] = useState<ViewId>('ids');
   const [identifiers, setIdentifiers] = useState<Identifier[]>(buildIdentifiers);
   const [logs, setLogs] = useState<LogEntry[]>(SEED_LOGS);
-  const [snapshots, setSnapshots] = useState<Snapshot[]>(SEED_SNAPSHOTS);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [applying, setApplying] = useState<{ items: ApplyItem[]; done: boolean } | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
@@ -121,6 +118,27 @@ function AppWindow() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Query the real public (egress) IP and patch the 公网 IP row.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
+        const r = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
+        clearTimeout(timer);
+        const ip = (await r.json())?.ip as string | undefined;
+        if (cancelled || !ip) return;
+        setIdentifiers(ids => ids.map(i =>
+          i.key === 'public_ip' ? { ...i, original: ip, value: ip, staged: null } : i
+        ));
+      } catch {
+        /* offline / blocked — leave 未知 */
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Load persisted settings on mount; persist on every change afterwards.
@@ -166,43 +184,31 @@ function AppWindow() {
     addLog('info', '已为所有未锁定标识生成新值（待应用）');
   };
 
+  // 模拟还原：仅重置页面状态，不触碰真实系统/配置。
   const resetAll = () => {
     setIdentifiers(ids => ids.map(i => ({ ...i, value: i.original, staged: null })));
-    addLog('ok', '已将全部标识还原为原始值');
-    toast('ok', '全部已还原', '所有标识恢复到出厂基线');
+    addLog('ok', '（模拟）已将全部标识还原为读取到的原始值');
+    toast('ok', '已模拟还原', '仅重置页面显示，未改动系统');
   };
 
+  // 模拟应用：只更新页面状态，不做任何真实写入（见后端 write_identifier）。
   const applyAll = async () => {
     const pending = identifiers.filter(i => i.staged != null && i.staged !== i.value);
     if (pending.length === 0) return;
 
-    if (opts.autoBackup) {
-      const snap: Snapshot = {
-        id: 'snap-' + Date.now(), name: '应用前自动备份', time: '刚刚',
-        auto: true, changes: pending.length, note: '应用更改时自动创建',
-      };
-      setSnapshots(S => [snap, ...S]);
-      addLog('ok', `已创建自动快照（${pending.length} 项变更）`);
-    }
-
     let items: ApplyItem[] = pending.map(p => ({ key: p.key, label: p.label, state: 'wait' }));
     setApplying({ items, done: false });
-    addLog('info', `开始应用 ${pending.length} 项标识更改…`);
+    addLog('info', `开始模拟应用 ${pending.length} 项标识更改…`);
 
     await new Promise(r => setTimeout(r, 350));
 
     for (let idx = 0; idx < items.length; idx++) {
       items = items.map((it, i) => i === idx ? { ...it, state: 'run' } : it);
       setApplying({ items: [...items], done: false });
-      addLog('info', `写入「${items[idx].label}」…`);
+      addLog('info', `（模拟）应用「${items[idx].label}」…`);
 
-      // Registry identifiers write for real; hardware ones (MAC/disk/…) aren't
-      // yet supported — log a warning but keep the flow going.
-      try {
-        await deviceService.writeIdentifier(pending[idx].key, pending[idx].staged!);
-      } catch (e) {
-        addLog('warn', `「${items[idx].label}」写入未完成：${e}`);
-      }
+      // Simulation only — no real system/hardware write is performed.
+      await deviceService.writeIdentifier(pending[idx].key, pending[idx].staged!).catch(() => {});
 
       items = items.map((it, i) => i === idx ? { ...it, state: 'done' } : it);
       setApplying({ items: [...items], done: false });
@@ -213,31 +219,9 @@ function AppWindow() {
     ));
     items = items.map(it => ({ ...it, state: 'done' }));
     setApplying({ items, done: true });
-    addLog('ok', `全部 ${pending.length} 项标识已成功写入`);
-    toast('ok', '更改已应用', `${pending.length} 项设备标识已更新`);
+    addLog('ok', `（模拟）${pending.length} 项更改已应用到页面`);
+    toast('ok', '模拟应用成功', `${pending.length} 项已更新（未写入真实系统）`);
     setTimeout(() => setApplying(null), 1100);
-  };
-
-  const createSnapshot = () => {
-    const modified = identifiers.filter(i => i.value !== i.original).length;
-    const snap: Snapshot = {
-      id: 'snap-' + Date.now(), name: '手动快照', time: '刚刚',
-      auto: false, changes: modified, note: '用户手动创建',
-    };
-    setSnapshots(S => [snap, ...S]);
-    addLog('ok', '已创建手动快照');
-    toast('ok', '快照已创建', '可在历史中随时还原');
-  };
-
-  const restoreSnapshot = (s: Snapshot) => {
-    setIdentifiers(ids => ids.map(i => ({ ...i, value: i.original, staged: null })));
-    addLog('ok', `已从快照「${s.name}」还原`);
-    toast('ok', '已还原快照', s.name);
-  };
-
-  const deleteSnapshot = (id: string) => {
-    setSnapshots(S => S.filter(s => s.id !== id));
-    addLog('warn', '已删除一个快照');
   };
 
   const diagnose = async () => {
@@ -300,10 +284,6 @@ function AppWindow() {
               resetAll={resetAll} stageAll={stageAll} onCopy={onCopy}
               onDiagnose={diagnose} diagnosing={diagnosing}
             />
-          )}
-          {view === 'history' && (
-            <History snapshots={snapshots} identifiers={identifiers}
-              onRestore={restoreSnapshot} onCreate={createSnapshot} onDelete={deleteSnapshot} />
           )}
           {view === 'logs' && (
             <Logs logs={logs} onClear={() => setLogs([])} />
