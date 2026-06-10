@@ -37,3 +37,10 @@ export interface ApplyItem {
   label: string;
   state: 'wait' | 'run' | 'done';
 }
+
+export interface DeviceInfo {
+  /** identifier key -> live value read from the machine */
+  identifiers: Record<string, string>;
+  /** read-only system info rows */
+  system: Array<{ label: string; value: string }>;
+}

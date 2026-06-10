@@ -1,6 +1,5 @@
 import Icon from '../common/Icon';
 import type { Identifier, Snapshot } from '../../types';
-import { SYSTEM_INFO } from '../../data';
 
 function StatCard({ icon, label, value, sub, tone }: {
   icon: string; label: string; value: number; sub?: string; tone?: string;
@@ -50,9 +49,10 @@ interface DashboardProps {
   snapshots: Snapshot[];
   onGoto: (view: 'ids') => void;
   fingerprint: string;
+  systemInfo: Array<{ label: string; value: string }>;
 }
 
-export default function Dashboard({ identifiers, snapshots, onGoto, fingerprint }: DashboardProps) {
+export default function Dashboard({ identifiers, snapshots, onGoto, fingerprint, systemInfo }: DashboardProps) {
   const modified = identifiers.filter(i => i.value !== i.original).length;
   const locked = identifiers.filter(i => i.locked).length;
   const groups = ['系统标识', '网络', '硬件'] as const;
@@ -115,10 +115,10 @@ export default function Dashboard({ identifiers, snapshots, onGoto, fingerprint 
           <div className="card-title" style={{ marginBottom: 12 }}>
             <span className="ct-icon"><Icon name="monitor" size={15} /></span>系统信息
           </div>
-          {SYSTEM_INFO.map((s, i) => (
+          {systemInfo.map((s, i) => (
             <div key={i} style={{
               display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 0',
-              borderBottom: i < SYSTEM_INFO.length - 1 ? '1px solid var(--hairline)' : 'none',
+              borderBottom: i < systemInfo.length - 1 ? '1px solid var(--hairline)' : 'none',
             }}>
               <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{s.label}</span>
               <span style={{ fontSize: 12.5, fontWeight: 600, textAlign: 'right' }}>{s.value}</span>

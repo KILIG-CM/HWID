@@ -1,11 +1,11 @@
-import { useState, useLayoutEffect } from 'react';
+import { useState, useLayoutEffect, useEffect } from 'react';
 import Icon from './components/common/Icon';
 import Dashboard from './components/panels/Dashboard';
 import DeviceIDs from './components/panels/DeviceIDs';
 import History from './components/panels/History';
 import Logs from './components/panels/Logs';
 import Settings from './components/panels/Settings';
-import { buildIdentifiers, shortHash, SEED_LOGS, SEED_SNAPSHOTS } from './data';
+import { buildIdentifiers, shortHash, SEED_LOGS, SEED_SNAPSHOTS, SYSTEM_INFO } from './data';
 import { deviceService } from './services/deviceService';
 import { isTauri, minimizeWindow, toggleMaximizeWindow, closeWindow } from './services/windowControls';
 import type { Identifier, Snapshot, LogEntry, AppSettings, ApplyItem } from './types';
@@ -88,9 +88,41 @@ function AppWindow() {
   const [applying, setApplying] = useState<{ items: ApplyItem[]; done: boolean } | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const [opts, setOpts] = useState<AppSettings>({ autoBackup: true, confirm: false, verboseLog: false });
+  const [systemInfo, setSystemInfo] = useState(SYSTEM_INFO);
 
   const addLog = (lvl: LogEntry['lvl'], msg: string) =>
     setLogs(L => [...L, { t: nowTime(), lvl, msg }]);
+
+  // On startup inside the desktop app, read the REAL machine identifiers
+  // + system info from the Rust backend and replace the seed/demo values.
+  useEffect(() => {
+    if (!NATIVE) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await deviceService.loadDeviceInfo();
+        if (cancelled) return;
+        const keys = Object.keys(info.identifiers);
+        if (keys.length) {
+          setIdentifiers(ids =>
+            ids.map(i => {
+              const real = info.identifiers[i.key];
+              // Replace both original + current value so the row reads "原始"
+              // and any later edits diff against the real machine value.
+              return real != null ? { ...i, original: real, value: real, staged: null } : i;
+            })
+          );
+        }
+        if (info.system.length) setSystemInfo(info.system);
+        setFingerprint(shortHash());
+        addLog('ok', `已读取本机设备信息（${keys.length} 项标识）`);
+      } catch (e) {
+        if (!cancelled) addLog('warn', `读取本机信息失败：${e}`);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const toast = (type: Toast['type'], msg: string, desc?: string) => {
     const id = Math.random();
@@ -246,7 +278,8 @@ function AppWindow() {
 
         <main className="content" key={view}>
           {view === 'dashboard' && (
-            <Dashboard identifiers={identifiers} snapshots={snapshots} onGoto={setView} fingerprint={fingerprint} />
+            <Dashboard identifiers={identifiers} snapshots={snapshots} onGoto={setView}
+              fingerprint={fingerprint} systemInfo={systemInfo} />
           )}
           {view === 'ids' && (
             <DeviceIDs

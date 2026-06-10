@@ -7,7 +7,11 @@
  * Tauri) they fall back to a mock so the UI is still fully explorable.
  */
 
+import type { DeviceInfo } from '../types';
+
 export interface IDeviceService {
+  /** Read all real identifiers + system info from the machine (empty in browser). */
+  loadDeviceInfo(): Promise<DeviceInfo>;
   writeIdentifier(key: string, value: string): Promise<void>;
   readIdentifier(key: string): Promise<string>;
   runDiagnostic(onLine: (lvl: string, msg: string) => void): Promise<void>;
@@ -25,6 +29,10 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
 }
 
 class TauriDeviceService implements IDeviceService {
+  async loadDeviceInfo(): Promise<DeviceInfo> {
+    return tauriInvoke<DeviceInfo>('load_device_info');
+  }
+
   async writeIdentifier(key: string, value: string): Promise<void> {
     await tauriInvoke<void>('write_identifier', { key, value });
   }
@@ -43,6 +51,11 @@ class TauriDeviceService implements IDeviceService {
 }
 
 class MockDeviceService implements IDeviceService {
+  async loadDeviceInfo(): Promise<DeviceInfo> {
+    // Browser/dev: no real machine — keep the UI's seed values.
+    return { identifiers: {}, system: [] };
+  }
+
   async writeIdentifier(_key: string, _value: string): Promise<void> {
     await new Promise((r) => setTimeout(r, 420));
   }

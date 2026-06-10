@@ -5,6 +5,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            device::load_device_info,
             device::read_identifier,
             device::write_identifier,
             device::run_diagnostic,
