@@ -1,79 +1,143 @@
-# 设备标识管理器 — 桌面应用（Tauri）
+# 设备标识管理器桌面版说明
 
-本项目是一个 **Tauri 桌面应用**：前端用 React + Vite，后端用 Rust。
-界面与浏览器版完全一致，但运行为原生 Windows 窗口，并能调用真实的
-注册表 / WMI 来读写设备标识。
+本项目桌面版基于 **Tauri 2 + React + Rust** 构建，目标平台为 Windows。
 
-## 一、在 Windows 上打包 .exe（你要的最终产物）
+前端负责页面展示和交互，Rust 后端负责读取 Windows 上的注册表、WMI 与系统信息。当前版本支持真实读取设备信息，但修改系统标识仍为模拟逻辑。
 
-> 最终的 `.exe` / 安装包必须在 **Windows 机器**上构建。
+## 版本信息
 
-### 1. 安装前置环境（一次性）
+- 当前应用版本：`0.1.4`
+- 产品名称：设备标识管理器
+- 主程序名：DeviceIDManager
+- Release 页面：[v0.1.4](https://github.com/KILIG-CM/HWID/releases/tag/v0.1.4)
 
-- **Node.js**（18+）：https://nodejs.org
-- **Rust**：https://www.rust-lang.org/tools/install （安装时会自动装 MSVC 工具链；
-  如果提示缺少 “Visual Studio C++ Build Tools”，按提示装上即可）
-- **WebView2 运行时**：Win11 自带；Win10 若没有，从微软官网装
-  “Microsoft Edge WebView2 Runtime”
+## Windows 使用说明
 
-### 2. 拉取代码并安装依赖
+1. 从 Release 页面下载安装包。
+2. 安装后启动应用。
+3. 如果部分系统信息读取失败，可以尝试右键「以管理员身份运行」。
+
+管理员权限可能影响注册表读取、WMI 查询或部分硬件信息枚举结果。
+
+## 本地运行
+
+安装依赖：
 
 ```bash
-git clone https://github.com/KILIG-CM/HWID.git
-cd HWID
 npm install
 ```
 
-### 3. 开发模式（热重载，边改边看）
+启动桌面开发模式：
 
 ```bash
 npm run tauri:dev
 ```
 
-会弹出原生窗口，改前端代码即时刷新。
+仅启动前端预览：
 
-### 4. 打包正式安装包
+```bash
+npm run dev
+```
+
+注意：纯前端预览不会读取真实设备信息，会回退到模拟数据。
+
+## 打包 Windows 安装包
 
 ```bash
 npm run tauri:build
 ```
 
-产物在：
+构建产物位于：
 
-```
+```text
 src-tauri/target/release/bundle/
-├── nsis/   设备标识管理器_0.1.0_x64-setup.exe   ← NSIS 安装程序
-└── msi/    设备标识管理器_0.1.0_x64_zh-CN.msi    ← MSI 安装包
 ```
 
-免安装的单文件 exe 在：
+当前配置主要生成 NSIS 安装包。免安装主程序通常位于：
+
+```text
+src-tauri/target/release/DeviceIDManager.exe
 ```
-src-tauri/target/release/设备标识管理器.exe
+
+具体文件名以本机 Tauri 构建输出为准。
+
+## 真实读取能力
+
+Windows 桌面版会通过 Rust 后端读取真实设备信息。
+
+主要后端入口：
+
+```text
+src-tauri/src/device.rs
 ```
 
-## 二、真实系统调用说明
+当前读取内容包括：
 
-读写注册表/硬件标识是**系统级特权操作**，需以**管理员身份运行**，且仅应在
-**授权的运维 / 测试场景**下使用。
+| 分组 | 项目 | 来源 |
+| --- | --- | --- |
+| 网络 | MAC 地址 | Win32_NetworkAdapter |
+| 网络 | 公网 IP | 前端联网查询 |
+| 硬件 | 硬盘序列号 | Win32_DiskDrive |
+| 硬件 | CPU 标识 | Win32_Processor |
+| 硬件 | 主板序列号 | Win32_BaseBoard |
+| 硬件 | 主板 UUID | Win32_ComputerSystemProduct |
+| 硬件 | 内存序列号 | Win32_PhysicalMemory |
+| 硬件 | 显卡序列号 | Win32_VideoController / PNPDeviceID |
 
-后端接口在 `src-tauri/src/device.rs`：
+读取失败时，界面会显示「未知」或保留对应的失败状态。
 
-| 命令 | 说明 | 当前状态 |
-|------|------|----------|
-| `read_identifier(key)`  | 读取单项标识 | 注册表三项（机器GUID/设备ID/产品ID）已接通；硬件项（MAC/硬盘/CPU/主板）待补 WMI |
-| `write_identifier(key,value)` | 写入单项标识 | 注册表三项已接通；硬件项待补 |
-| `run_diagnostic()` | 环境诊断 | 含管理员/注册表访问检查 |
+## 修改逻辑说明
 
-- 在 **Windows** 上：走真实 `winreg` / `wmi`。
-- 在 **非 Windows**（如本地 mac/Linux 开发）或**纯浏览器** `npm run dev`：
-  自动回退为模拟实现，界面照常可玩。
+当前版本不会真实修改系统。
 
-> 待办（已在代码中用 `TODO` 标出）：硬件类标识（MAC 地址、硬盘序列号、
-> CPU/主板序列号）的 WMI 读取与写入路由。MAC 可通过网卡的
-> `NetworkAddress` 注册表值实现；磁盘/主板序列号通常需厂商工具或驱动层支持。
+后端接口：
 
-## 三、以管理员身份运行
+```text
+write_identifier(key, value)
+```
 
-打包后的 exe 右键「以管理员身份运行」即可获得注册表写入权限。
-如需默认请求提权，可在 `src-tauri/tauri.conf.json` 的 NSIS 配置或
-应用清单中加入 `requireAdministrator`（需要时告诉我，我来加）。
+目前是 no-op 模拟实现，只用于演示应用流程。它不会写入：
+
+- 注册表
+- 网卡配置
+- 硬盘信息
+- 主板信息
+- CPU 信息
+- 内存信息
+- 显卡信息
+- 其他硬件或系统标识
+
+前端的生成、应用更改、撤销、还原等操作只改变页面状态或模拟数据。真实写入逻辑后续待定。
+
+## 历史与备份
+
+历史与备份功能当前暂时禁用。
+
+当前版本不会创建真实备份，也不会执行真实还原。「全部还原」如果出现在界面中，也只应视为模拟页面状态恢复。
+
+## 诊断功能
+
+运行诊断会检查：
+
+- 前端与 Tauri 后端通信
+- 注册表访问情况
+- WMI 服务连接情况
+- 当前是否处于模拟修改模式
+
+诊断不会修改系统。
+
+## 非 Windows 环境
+
+在 macOS、Linux 或普通浏览器环境中，后端不会读取真实设备标识。应用会使用模拟数据，方便开发和预览界面。
+
+## 后续接入真实修改时的注意事项
+
+真实修改系统标识属于高风险能力。后续如果启用，应至少补充：
+
+- 明确的用户确认
+- 管理员权限检查
+- 修改前备份
+- 修改失败回滚
+- 操作日志
+- 风险提示
+- 针对不同硬件和 Windows 版本的兼容性处理
