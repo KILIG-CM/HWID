@@ -1,0 +1,52 @@
+name: Release (Windows)
+
+# 推送形如 v0.1.0 的 tag 时，自动在 Windows 上构建并发布安装包到 Releases。
+on:
+  push:
+    tags:
+      - 'v*'
+  # 也可在 Actions 页面手动触发
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: 缓存 Rust 依赖
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装前端依赖
+        run: npm install
+
+      - name: 构建并发布（tauri-action）
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # 用触发的 tag 名作为 Release；自动上传 NSIS 安装包
+          tagName: ${{ github.ref_name }}
+          releaseName: '设备标识管理器 ${{ github.ref_name }}'
+          releaseBody: |
+            Windows 桌面版（NSIS 安装程序）。
+
+            下载下方的 `*-setup.exe`，安装后**右键「以管理员身份运行」**即可读取/修改本机设备标识。
+          releaseDraft: false
+          prerelease: false
