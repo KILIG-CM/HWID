@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>设备标识管理器 — 原型</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="panel_dashboard.jsx"></script>
+<script type="text/babel" src="panel_ids.jsx"></script>
+<script type="text/babel" src="panel_misc.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+  const TWEAK_DEFAULTS = {
+    accent: "跟随主题",
+    radius: "跟随主题",
+    density: "跟随主题",
+  };
+
+  const ACCENT_HEX = { "海蓝": "#2f74e0", "靛紫": "#7a5ae0", "琥珀": "#d4881c" };
+
+  function computeVars(t) {
+    const v = {};
+    if (t.accent !== "跟随主题") {
+      const h = ACCENT_HEX[t.accent];
+      v["--accent"] = h;
+      v["--accent-strong"] = `color-mix(in oklch, ${h} 84%, #000)`;
+      v["--accent-soft"] = `color-mix(in oklch, ${h} 14%, #fff)`;
+      v["--accent-softer"] = `color-mix(in oklch, ${h} 7%, #fff)`;
+    }
+    if (t.radius === "直角") Object.assign(v, { "--radius-lg": "6px", "--radius": "5px", "--radius-sm": "4px" });
+    if (t.radius === "圆润") Object.assign(v, { "--radius-lg": "22px", "--radius": "18px", "--radius-sm": "13px" });
+    if (t.density === "紧凑") Object.assign(v, { "--pad-card": "14px", "--gap": "11px", "--row-h": "38px" });
+    if (t.density === "宽松") Object.assign(v, { "--pad-card": "24px", "--gap": "20px", "--row-h": "48px" });
+    return v;
+  }
+
+  function Stage() {
+    const [scale, setScale] = React.useState(1);
+    const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+    React.useLayoutEffect(() => {
+      const fit = () => {
+        const pad = 32;
+        const s = Math.min((window.innerWidth - pad) / 1180, (window.innerHeight - pad) / 760, 1);
+        setScale(s);
+      };
+      fit();
+      window.addEventListener("resize", fit);
+      return () => window.removeEventListener("resize", fit);
+    }, []);
+    const vars = computeVars(t);
+    return (
+      <React.Fragment>
+        <div className="stage">
+          <div style={{ transform: `scale(${scale})`, transformOrigin: "center center", transition: "transform .15s ease" }}>
+            <App tweakVars={vars} />
+          </div>
+        </div>
+        <TweaksPanel>
+          <TweakSection label="外观调整" />
+          <TweakRadio label="主题色" value={t.accent}
+            options={["跟随主题", "海蓝", "靛紫", "琥珀"]}
+            onChange={(v) => setTweak("accent", v)} />
+          <TweakRadio label="圆角" value={t.radius}
+            options={["跟随主题", "直角", "圆润"]}
+            onChange={(v) => setTweak("radius", v)} />
+          <TweakRadio label="密度" value={t.density}
+            options={["跟随主题", "紧凑", "宽松"]}
+            onChange={(v) => setTweak("density", v)} />
+        </TweaksPanel>
+      </React.Fragment>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Stage />);
+</script>
+</body>
+</html>
