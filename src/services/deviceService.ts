@@ -51,19 +51,19 @@ class MockDeviceService implements IDeviceService {
     return { identifiers: [], system: [] };
   }
 
-  async writeIdentifier(_key: string, _value: string): Promise<void> {
+  async writeIdentifier(): Promise<void> {
+    // 模拟：仅延时，不做任何真实写入。
     await new Promise((r) => setTimeout(r, 420));
   }
 
   async runDiagnostic(onLine: (lvl: string, msg: string) => void): Promise<void> {
+    // 浏览器环境无法读取真实硬件，全部为模拟输出，逐条明确标注「模拟」。
     const lines: Array<[string, string]> = [
-      ['info', '开始环境诊断…'],
-      ['ok', '管理员权限：已获取'],
-      ['ok', '注册表访问：正常'],
-      ['info', '枚举网络适配器（2 个）…'],
-      ['warn', '无线网卡 MAC 已锁定'],
-      ['ok', '硬件标识读取完成'],
-      ['ok', '诊断完成，未发现异常'],
+      ['info', '（模拟）开始环境诊断…'],
+      ['warn', '（模拟）浏览器环境，无法读取真实硬件信息'],
+      ['ok', '（模拟）前端与后端通信正常'],
+      ['info', '（模拟）当前为模拟修改模式，不会写入真实系统'],
+      ['ok', '（模拟）诊断完成'],
     ];
     for (const [lvl, msg] of lines) {
       onLine(lvl, msg);

@@ -3,11 +3,11 @@ import Icon from './components/common/Icon';
 import DeviceIDs from './components/panels/DeviceIDs';
 import Logs from './components/panels/Logs';
 import Settings from './components/panels/Settings';
-import { buildIdentifiers, genForKind, SEED_LOGS } from './data';
+import { buildIdentifiers, genForKind } from './data';
 import { deviceService } from './services/deviceService';
 import { loadSettings, saveSettings } from './services/settingsService';
 import { isTauri, minimizeWindow, toggleMaximizeWindow, closeWindow } from './services/windowControls';
-import type { Identifier, LogEntry, AppSettings, ApplyItem } from './types';
+import type { Identifier, LogEntry, AppSettings, ApplyItem, DeviceInfo } from './types';
 
 const NATIVE = isTauri();
 
@@ -18,6 +18,15 @@ const NAV = [
 ] as const;
 
 type ViewId = typeof NAV[number]['id'];
+
+// 公网 IP 查询源：primary 优先国内可达，其余为兜底，逐个尝试直到取到 IP。
+// 各源 JSON 字段不同：ipip → data.ip，ipify/ip.sb → ip，ifconfig.me → ip_addr。
+const IP_ENDPOINTS = [
+  'https://myip.ipip.net/json',
+  'https://api.ip.sb/jsonip',
+  'https://api64.ipify.org?format=json',
+  'https://ifconfig.me/all.json',
+];
 
 function nowTime() {
   const d = new Date();
@@ -78,7 +87,7 @@ function ApplyOverlay({ items, done }: { items: ApplyItem[]; done: boolean }) {
 function AppWindow() {
   const [view, setView] = useState<ViewId>('ids');
   const [identifiers, setIdentifiers] = useState<Identifier[]>(buildIdentifiers);
-  const [logs, setLogs] = useState<LogEntry[]>(SEED_LOGS);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [applying, setApplying] = useState<{ items: ApplyItem[]; done: boolean } | null>(null);
   const [diagnosing, setDiagnosing] = useState(false);
@@ -86,6 +95,30 @@ function AppWindow() {
 
   const addLog = (lvl: LogEntry['lvl'], msg: string) =>
     setLogs(L => [...L, { t: nowTime(), lvl, msg }]);
+
+  // Startup: record a single, real status line — no fake fixed logs.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot startup log
+    addLog('info', '应用已启动，当前为模拟修改模式（不写入真实系统）');
+  }, []);
+
+  // Replace the identifier list with a freshly read device snapshot from the
+  // backend (registry + WMI). Re-reads reset any staged/modified values — this
+  // is the real machine state. Used on startup and on the "运行诊断" re-detect.
+  const applyDeviceInfo = (info: DeviceInfo) =>
+    setIdentifiers(info.identifiers.map(b => ({
+      key: b.key,
+      group: b.group as Identifier['group'],
+      label: b.label,
+      icon: b.icon,
+      desc: b.desc,
+      original: b.value,
+      value: b.value,
+      staged: null,
+      locked: b.locked,
+      readonly: b.readonly,
+      gen: genForKind(b.kind),
+    })));
 
   // On startup inside the desktop app, build the identifier list from the REAL
   // machine (registry + WMI) — no hardcoded device names. Only real, existing
@@ -97,48 +130,47 @@ function AppWindow() {
       try {
         const info = await deviceService.loadDeviceInfo();
         if (cancelled) return;
-        if (info.identifiers.length) {
-          setIdentifiers(info.identifiers.map(b => ({
-            key: b.key,
-            group: b.group as Identifier['group'],
-            label: b.label,
-            icon: b.icon,
-            desc: b.desc,
-            original: b.value,
-            value: b.value,
-            staged: null,
-            locked: b.locked,
-            gen: genForKind(b.kind),
-          })));
-        }
+        if (info.identifiers.length) applyDeviceInfo(info);
         addLog('ok', `已识别本机设备信息（${info.identifiers.length} 项）`);
       } catch (e) {
         if (!cancelled) addLog('warn', `读取本机信息失败：${e}`);
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Query the real public (egress) IP and patch the 公网 IP row.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 5000);
-        const r = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
-        clearTimeout(timer);
-        const ip = (await r.json())?.ip as string | undefined;
-        if (cancelled || !ip) return;
-        setIdentifiers(ids => ids.map(i =>
-          i.key === 'public_ip' ? { ...i, original: ip, value: ip, staged: null } : i
-        ));
-      } catch {
-        /* offline / blocked — leave 未知 */
+  // Query the real public (egress) IP and patch the 公网 IP row. The 公网 IP is
+  // read-only — it never generates/locks/applies; this just refreshes its value.
+  const [ipLoading, setIpLoading] = useState(false);
+  const refreshPublicIp = async () => {
+    setIpLoading(true);
+    try {
+      for (const url of IP_ENDPOINTS) {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 5000);
+          const r = await fetch(url, { signal: ctrl.signal });
+          clearTimeout(timer);
+          if (!r.ok) continue;
+          const j = await r.json();
+          const ip = (j?.data?.ip ?? j?.ip ?? j?.ip_addr) as string | undefined;
+          if (ip) {
+            setIdentifiers(ids => ids.map(i =>
+              i.key === 'public_ip' ? { ...i, original: ip, value: ip, staged: null } : i
+            ));
+            return; // 取到即停
+          }
+        } catch {
+          /* 该源失败，尝试下一个兜底 */
+        }
       }
-    })();
-    return () => { cancelled = true; };
+    } finally {
+      setIpLoading(false);
+    }
+  };
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot fetch on mount
+    refreshPublicIp();
   }, []);
 
   // Load persisted settings on mount; persist on every change afterwards.
@@ -180,13 +212,18 @@ function AppWindow() {
   };
 
   const stageAll = () => {
-    setIdentifiers(ids => ids.map(i => i.locked ? i : { ...i, staged: i.gen() }));
-    addLog('info', '已为所有未锁定标识生成新值（待应用）');
+    // 只读参考项（公网 IP / CPU / 显卡）不参与批量生成。
+    setIdentifiers(ids => ids.map(i =>
+      i.locked || i.readonly ? i : { ...i, staged: i.gen() }
+    ));
+    addLog('info', '已为所有未锁定标识模拟生成新值（待应用）');
   };
 
-  // 模拟还原：仅重置页面状态，不触碰真实系统/配置。
+  // 模拟还原：仅重置页面状态，不触碰真实系统/配置；只读参考项保持不变。
   const resetAll = () => {
-    setIdentifiers(ids => ids.map(i => ({ ...i, value: i.original, staged: null })));
+    setIdentifiers(ids => ids.map(i =>
+      i.readonly ? i : { ...i, value: i.original, staged: null }
+    ));
     addLog('ok', '（模拟）已将全部标识还原为读取到的原始值');
     toast('ok', '已模拟还原', '仅重置页面显示，未改动系统');
   };
@@ -224,11 +261,31 @@ function AppWindow() {
     setTimeout(() => setApplying(null), 1100);
   };
 
+  // 「运行诊断」= 重新检测设备信息 + 刷新公网 IP + 环境诊断。
+  // 运行期间 diagnosing 为 true，按钮禁用以防重复点击。
   const diagnose = async () => {
     setDiagnosing(true);
+    addLog('info', '开始重新检测设备信息…');
+    try {
+      // 1) 重新读取网络 / 硬件 / 只读参考项。
+      const info = await deviceService.loadDeviceInfo();
+      if (info.identifiers.length) {
+        applyDeviceInfo(info);
+        addLog('ok', `设备信息重新检测成功（${info.identifiers.length} 项）`);
+      } else {
+        addLog('info', '当前环境无可读取的真实设备信息，保留现有列表');
+      }
+      // 2) 刷新公网 IP（只读参考项）。
+      await refreshPublicIp();
+      addLog('ok', '公网 IP 已刷新');
+    } catch (e) {
+      addLog('warn', `设备信息重新检测失败：${e}`);
+    }
+    // 3) 执行原有环境诊断。
     await deviceService.runDiagnostic((lvl, msg) => addLog(lvl as LogEntry['lvl'], msg));
+    addLog('ok', '诊断完成（含设备重新检测）');
     setDiagnosing(false);
-    toast('ok', '诊断完成', '环境正常');
+    toast('ok', '诊断完成', '已重新检测设备信息');
   };
 
   const onCopy = () => toast('info', '已复制到剪贴板');
@@ -269,8 +326,8 @@ function AppWindow() {
             <div className="device-chip">
               <span className="dc-dot" />
               <div style={{ minWidth: 0 }}>
-                <div className="dc-name truncate">WS-STUDIO-07</div>
-                <div className="dc-meta">服务运行中 · v2.4.1</div>
+                <div className="dc-name truncate">本机</div>
+                <div className="dc-meta">模拟修改模式 · 不写入系统</div>
               </div>
             </div>
           </div>
@@ -283,6 +340,7 @@ function AppWindow() {
               resetOne={resetOne} toggleLock={toggleLock} applyAll={applyAll}
               resetAll={resetAll} stageAll={stageAll} onCopy={onCopy}
               onDiagnose={diagnose} diagnosing={diagnosing}
+              onRefreshIp={refreshPublicIp} ipLoading={ipLoading}
             />
           )}
           {view === 'logs' && (

@@ -32,6 +32,7 @@ pub struct IdentifierInfo {
     pub value: String, // current real value ("未知" if unreadable)
     pub kind: String,  // generator kind: mac|ip|disk|cpu|mb|uuid|mem|gpu
     pub locked: bool,
+    pub readonly: bool, // 只读参考项（CPU / 显卡）：仅可复制，不参与生成 / 应用
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -161,20 +162,22 @@ mod windows_impl {
                     value: mac,
                     kind: "mac".into(),
                     locked: false,
+                    readonly: false,
                 });
                 idx += 1;
             }
         }
-        // 公网 IP — value is filled by the frontend via a live network query.
+        // 公网 IP — 只读参考项，value 由前端实时网络查询填充，仅复制 / 刷新。
         ids.push(IdentifierInfo {
             key: "public_ip".into(),
-            group: "网络".into(),
+            group: "只读参考".into(),
             label: "公网 IP".into(),
             icon: "network".into(),
             desc: "当前网络出口 IP · 实时查询".into(),
             value: UNKNOWN.into(),
             kind: "ip".into(),
             locked: false,
+            readonly: true,
         });
 
         // ===== 硬件 =====
@@ -200,17 +203,20 @@ mod windows_impl {
                     value: serial,
                     kind: "disk".into(),
                     locked: false,
+                    readonly: false,
                 });
                 idx += 1;
             }
         }
-        // CPU.
+        // CPU — ProcessorId 不是每颗 CPU 的唯一序列号（同型号/同架构可能相同），
+        // 因此仅作只读参考项展示，不参与生成 / 应用。
         if let Some(row) = wmi_one(&wmi, "SELECT Name, ProcessorId FROM Win32_Processor") {
+            let name = vstr(row.get("Name")).unwrap_or_else(|| UNKNOWN.to_string());
             ids.push(IdentifierInfo {
-                key: "cpu_id".into(), group: "硬件".into(), label: "CPU 标识".into(), icon: "cpu".into(),
-                desc: vstr(row.get("Name")).unwrap_or_else(|| UNKNOWN.to_string()),
+                key: "cpu_id".into(), group: "只读参考".into(), label: "CPU 标识".into(), icon: "cpu".into(),
+                desc: format!("{name} · 非唯一序列号，仅作参考"),
                 value: vstr(row.get("ProcessorId")).unwrap_or_else(|| UNKNOWN.to_string()),
-                kind: "cpu".into(), locked: false,
+                kind: "cpu".into(), locked: false, readonly: true,
             });
         }
         // Motherboard serial.
@@ -224,7 +230,7 @@ mod windows_impl {
                 key: "mb_serial".into(), group: "硬件".into(), label: "主板序列号".into(), icon: "cpu".into(),
                 desc: if desc.is_empty() { UNKNOWN.to_string() } else { desc },
                 value: vstr(row.get("SerialNumber")).unwrap_or_else(|| UNKNOWN.to_string()),
-                kind: "mb".into(), locked: false,
+                kind: "mb".into(), locked: false, readonly: false,
             });
         }
         // Motherboard / system UUID (SMBIOS).
@@ -233,41 +239,60 @@ mod windows_impl {
                 key: "mb_uuid".into(), group: "硬件".into(), label: "主板 UUID".into(), icon: "shield".into(),
                 desc: "系统 UUID · SMBIOS".into(),
                 value: vstr(row.get("UUID")).unwrap_or_else(|| UNKNOWN.to_string()),
-                kind: "uuid".into(), locked: false,
+                kind: "uuid".into(), locked: false, readonly: false,
             });
         }
-        // Memory serial (first stick with a serial).
+        // Memory — every populated stick with a serial (one row per module).
         if let Ok(rows) = wmi.raw_query::<HashMap<String, Variant>>(
             "SELECT SerialNumber, Manufacturer, PartNumber FROM Win32_PhysicalMemory",
         ) {
-            if let Some(row) = rows.iter().find(|r| vstr(r.get("SerialNumber")).is_some()) {
+            let mut idx = 0;
+            for row in &rows {
+                let serial = match vstr(row.get("SerialNumber")) { Some(s) => s, None => continue };
                 let mfr = vstr(row.get("Manufacturer")).unwrap_or_default();
                 let part = vstr(row.get("PartNumber")).unwrap_or_default();
                 let desc = format!("{mfr} {part}").trim().to_string();
                 ids.push(IdentifierInfo {
-                    key: "mem_serial".into(), group: "硬件".into(), label: "内存序列号".into(), icon: "cpu".into(),
+                    key: format!("mem_{idx}"), group: "硬件".into(),
+                    label: if idx == 0 { "内存序列号".into() } else { format!("内存序列号 · {}", idx + 1) },
+                    icon: "cpu".into(),
                     desc: if desc.is_empty() { "内存模组".into() } else { desc },
-                    value: vstr(row.get("SerialNumber")).unwrap_or_else(|| UNKNOWN.to_string()),
-                    kind: "mem".into(), locked: false,
+                    value: serial,
+                    kind: "mem".into(), locked: false, readonly: false,
                 });
+                idx += 1;
             }
         }
-        // GPU (real display adapter; pseudo-serial from PNP instance id).
+        // GPU — 本阶段只识别 NVIDIA / AMD 显卡（按 PNP 厂商 ID 或名称匹配）。
+        // Intel 核显、Microsoft Basic Display、虚拟/远程显示适配器等一律跳过；
+        // 显卡的值取自 PNPDeviceID，并非保证唯一的序列号，故仅作只读参考项。
         if let Ok(rows) = wmi.raw_query::<HashMap<String, Variant>>(
             "SELECT Name, PNPDeviceID FROM Win32_VideoController",
         ) {
-            let pick = rows.iter().find(|r| {
-                vstr(r.get("Name")).map(|n| !n.to_lowercase().contains("basic display")).unwrap_or(false)
-            }).or_else(|| rows.first());
-            if let Some(row) = pick {
+            let mut idx = 0;
+            for row in &rows {
+                let name = match vstr(row.get("Name")) { Some(n) => n, None => continue };
                 let pnp = vstr(row.get("PNPDeviceID")).unwrap_or_default();
+                let nl = name.to_lowercase();
+                let pu = pnp.to_uppercase();
+                let is_nvidia = pu.contains("VEN_10DE")
+                    || nl.contains("nvidia") || nl.contains("geforce")
+                    || nl.contains("rtx") || nl.contains("gtx") || nl.contains("quadro");
+                let is_amd = pu.contains("VEN_1002")
+                    || nl.contains("amd") || nl.contains("radeon");
+                if !(is_nvidia || is_amd) {
+                    continue; // 非 NVIDIA / AMD 显卡，本阶段不显示
+                }
                 let serial = pnp.rsplit('\\').next().unwrap_or("").trim().to_string();
                 ids.push(IdentifierInfo {
-                    key: "gpu_serial".into(), group: "硬件".into(), label: "显卡序列号".into(), icon: "monitor".into(),
-                    desc: vstr(row.get("Name")).unwrap_or_else(|| UNKNOWN.to_string()),
+                    key: format!("gpu_{idx}"), group: "只读参考".into(),
+                    label: if idx == 0 { "显卡标识".into() } else { format!("显卡标识 · {}", idx + 1) },
+                    icon: "monitor".into(),
+                    desc: format!("{name} · 来自 PNPDeviceID，非保证唯一序列号"),
                     value: if serial.is_empty() { UNKNOWN.into() } else { serial },
-                    kind: "gpu".into(), locked: false,
+                    kind: "gpu".into(), locked: false, readonly: true,
                 });
+                idx += 1;
             }
         }
 

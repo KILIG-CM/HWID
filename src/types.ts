@@ -1,6 +1,6 @@
 export interface Identifier {
   key: string;
-  group: '系统标识' | '网络' | '硬件';
+  group: '网络' | '硬件' | '只读参考';
   label: string;
   icon: string;
   desc: string;
@@ -8,16 +8,9 @@ export interface Identifier {
   value: string;
   staged: string | null;
   locked: boolean;
+  /** 只读参考项（如 CPU / 显卡）：仅可复制，不参与生成 / 锁定 / 批量 / 应用 / 还原。 */
+  readonly?: boolean;
   gen: () => string;
-}
-
-export interface Snapshot {
-  id: string;
-  name: string;
-  time: string;
-  auto: boolean;
-  changes: number;
-  note: string;
 }
 
 export interface LogEntry {
@@ -49,6 +42,7 @@ export interface DeviceInfo {
     value: string;
     kind: string;
     locked: boolean;
+    readonly: boolean;
   }>;
   /** read-only system info rows */
   system: Array<{ label: string; value: string }>;
